@@ -37,3 +37,30 @@ def obtener_todas_las_categorias():
         if conexion and conexion.is_connected():
             cursor.close()
             conexion.close()
+
+@app.get("/opciones/{pregunta_id}")
+def obtener_opciones_por_pregunta(pregunta_id: int):
+    conexion = None
+    cursor = None  
+    
+    try:
+        conexion = mysql.connector.connect(**DB_CONFIG)
+        cursor = conexion.cursor(dictionary=True)
+        
+        # 1. Agregamos "es_correcta" a la consulta
+        consulta = "SELECT id, pregunta_id, formato, contenido, es_correcta FROM opciones WHERE pregunta_id = %s"
+        cursor.execute(consulta, (pregunta_id,))
+        
+        # 2. Usamos fetchall() para traer los 4 botones, no solo 1
+        lista_opciones = cursor.fetchall()
+        return lista_opciones
+        
+    except Exception as e:
+        return {"error": str(e)}
+        
+    finally:
+        # 3. Un finally estructurado correctamente
+        if cursor:
+            cursor.close()
+        if conexion and conexion.is_connected():
+            conexion.close()
