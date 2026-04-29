@@ -2,6 +2,7 @@ from fastapi import FastAPI
 import mysql.connector
 from dotenv import load_dotenv
 import os
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -13,7 +14,14 @@ DB_CONFIG = {
     "password": os.getenv("DB_PASSWORD"),
     "database": os.getenv("DB_NAME")
 }
+
 print("Mis credenciales cargadas son:", DB_CONFIG)
+
+class UsuarioPuntaje(BaseModel):
+    nombre: str
+    puntaje: int
+    id_categoria: int
+
 @app.get("/categorias")
 def obtener_todas_las_categorias():
     conexion = None
@@ -65,33 +73,6 @@ def obtener_opciones_por_pregunta(pregunta_id: int):
         if conexion and conexion.is_connected():
             conexion.close()
 
-
-# @app.get("/preguntas/{categoria_id}")
-# def obtener_preguntas_por_categoria(categoria_id: int):
-#     conexion = None
-#     cursor = None  
-    
-#     try:
-#         conexion = mysql.connector.connect(**DB_CONFIG)
-#         cursor = conexion.cursor(dictionary=True)
-        
-#         # 1. Agregamos "es_correcta" a la consulta
-#         consulta = "SELECT id, categoria_id, enunciado, formato FROM preguntas WHERE categoria_id = %s"
-#         cursor.execute(consulta, (categoria_id,))
-        
-#         # 2. Usamos fetchall() para traer los 4 botones, no solo 1
-#         lista_preguntas = cursor.fetchall()
-#         return lista_preguntas
-        
-#     except Exception as e:
-#         return {"error": str(e)}
-        
-#     finally:
-#         # 3. Un finally estructurado correctamente
-#         if cursor:
-#             cursor.close()
-#         if conexion and conexion.is_connected():
-#             conexion.close()
             
 @app.get("/preguntas/{categoria_id}")
 def obtener_preguntas_por_categoria(categoria_id: int):
@@ -153,3 +134,44 @@ def obtener_preguntas_por_categoria(categoria_id: int):
             cursor.close()
         if conexion and conexion.is_connected():
             conexion.close()
+
+@app.post("/usuarios")
+def guardar_puntaje_usuario(datos_usuario: UsuarioPuntaje):
+    conexion = None
+    cursor = None
+    
+    try:
+        conexion = mysql.connector.connect(**DB_CONFIG)
+        cursor = conexion.cursor()
+        
+        #consulta INSERT. 
+        consulta = """
+            INSERT INTO usuarios (nombre, puntaje, id_categoria) 
+            VALUES (%s, %s, %s)
+        """
+        #valores que llegaron desde C#
+        valores = (datos_usuario.nombre, datos_usuario.puntaje, datos_usuario.id_categoria)
+        
+        cursor.execute(consulta, valores)
+        
+        
+        conexion.commit()
+        
+        return {
+            "estatus": "exito", 
+            "mensaje": "Puntaje guardado correctamente",
+            "id_generado": cursor.lastrowid
+        }
+        
+    except Exception as e:
+        
+        if conexion and conexion.is_connected():
+            conexion.rollback()
+        return {"estatus": "error", "mensaje": str(e)}
+        
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion and conexion.is_connected():
+            conexion.close()
+            
