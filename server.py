@@ -20,9 +20,12 @@ print("Mis credenciales cargadas son:", DB_CONFIG)
 
 
 class UsuarioPuntaje(BaseModel):
-    nombre: str
+    nombre: int
     puntaje: int
     id_categoria: int
+    
+class PeticionRegistro(BaseModel):
+    username: str
 
 @app.get("/categorias")
 def obtener_todas_las_categorias():
