@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import List, Dict
+import json
 import mysql.connector
 from dotenv import load_dotenv
 import os
@@ -186,6 +188,67 @@ def registrar_usuario(datos: PeticionRegistro):
         if conexion and conexion.is_connected():
             conexion.close()
 
+class GestorSalaEspera:
+    def _init_(self):
+        # Aqui guardaremos los tuneles de conexion y el nombre de cada jugador
+        self.conexiones_activas: List[Dict[str, any]] = []
+
+    async def conectar(self, websocket: WebSocket, nombre: str):
+        await websocket.accept()
+        self.conexiones_activas.append({"ws": websocket, "nombre": nombre})
+
+    def desconectar(self, websocket: WebSocket):
+        self.conexiones_activas = [conn for conn in self.conexiones_activas if conn["ws"] != websocket]
+
+    async def enviar_a_todos(self, mensaje: dict):
+        # Esta es la funcion que les habla a los 4 usuarios
+        for conexion in self.conexiones_activas:
+            await conexion["ws"].send_json(mensaje)
+            
+    def obtener_nombres(self):
+        # Saca solo los nombres para mostrarlos en la pantalla
+        return [conn["nombre"] for conn in self.conexiones_activas]
+
+# Instanciamos el manager para que este vivo todo el tiempo
+sala_manager = GestorSalaEspera()
+
+@app.websocket("/ws/sala")
+async def websocket_sala(websocket: WebSocket):
+    # El cliente se conecta y le pedimos su nombre
+    await websocket.accept()
+    
+    try:
+        # Esperamos a que nos mande el nombre del jugador apenas se conecta
+        nombre_jugador = await websocket.receive_text()
+        
+        # Lo metemos a la memoria de la sala
+        sala_manager.conexiones_activas.append({"ws": websocket, "nombre": nombre_jugador})
+        
+        # Le avisamos a TODOS los conectados la lista actualizada de nombres
+        nombres_actuales = sala_manager.obtener_nombres()
+        await sala_manager.enviar_a_todos({
+            "accion": "actualizar_sala",
+            "jugadores": nombres_actuales
+        })
+        
+        # Se inicia el juego cuando ya hay 4 usuarios
+        if len(sala_manager.conexiones_activas) == 4:
+            await sala_manager.enviar_a_todos({
+                "accion": "iniciar_juego",
+                "mensaje": "¡Listos, comienza el Kahoot!"
+            })
+
+        while True:
+            data = await websocket.receive_text()
+            
+    except WebSocketDisconnect:
+        # Si a alguien se le cierra el juego o se le va el internet
+        sala_manager.desconectar(websocket)
+        # Les avisamos a los que quedaron en la sala que alguien se fue
+        await sala_manager.enviar_a_todos({
+            "accion": "actualizar_sala",
+            "jugadores": sala_manager.obtener_nombres()
+        })
 @app.put("/guardar_puntaje")
 def actualizar_puntaje(datos: UsuarioPuntaje):
     conexion = None
