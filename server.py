@@ -175,3 +175,49 @@ def guardar_puntaje_usuario(datos_usuario: UsuarioPuntaje):
         if conexion and conexion.is_connected():
             conexion.close()
             
+class PeticionRegistro(BaseModel):
+    username: str
+
+@app.post("/registro")
+def registrar_usuario(datos: PeticionRegistro):
+    conexion = None
+    cursor = None
+    
+    try:
+        conexion = mysql.connector.connect(**DB_CONFIG)
+        cursor = conexion.cursor(dictionary=True)
+        
+        # Buscamos si el usuario ya existe usando la columna 'nombre'
+        cursor.execute("SELECT id FROM usuarios WHERE nombre = %s", (datos.username,))
+        usuario = cursor.fetchone()
+        
+        if usuario:
+            # Regresamos su ID 
+            return {
+                "existe": True, 
+                "id_usuario": usuario["id"], 
+                "mensaje": "Bienvenido de vuelta"
+            }
+            
+        # Si no existe lo insertamos 
+        cursor.execute("INSERT INTO usuarios (nombre) VALUES (%s)", (datos.username,))
+        conexion.commit() 
+        
+        nuevo_id = cursor.lastrowid
+        
+        return {
+            "existe": False, 
+            "id_usuario": nuevo_id, 
+            "mensaje": "Usuario nuevo registrado correctamente"
+        }
+        
+    except Exception as e:
+        if conexion and conexion.is_connected():
+            conexion.rollback()
+        return {"error": str(e)}
+        
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion and conexion.is_connected():
+            conexion.close()
