@@ -15,7 +15,9 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME")
 }
 
+
 print("Mis credenciales cargadas son:", DB_CONFIG)
+
 
 class UsuarioPuntaje(BaseModel):
     nombre: str
@@ -134,49 +136,8 @@ def obtener_preguntas_por_categoria(categoria_id: int):
             cursor.close()
         if conexion and conexion.is_connected():
             conexion.close()
-
-@app.post("/usuarios")
-def guardar_puntaje_usuario(datos_usuario: UsuarioPuntaje):
-    conexion = None
-    cursor = None
-    
-    try:
-        conexion = mysql.connector.connect(**DB_CONFIG)
-        cursor = conexion.cursor()
-        
-        #consulta INSERT. 
-        consulta = """
-            INSERT INTO usuarios (nombre, puntaje, id_categoria) 
-            VALUES (%s, %s, %s)
-        """
-        #valores que llegaron desde C#
-        valores = (datos_usuario.nombre, datos_usuario.puntaje, datos_usuario.id_categoria)
-        
-        cursor.execute(consulta, valores)
-        
-        
-        conexion.commit()
-        
-        return {
-            "estatus": "exito", 
-            "mensaje": "Puntaje guardado correctamente",
-            "id_generado": cursor.lastrowid
-        }
-        
-    except Exception as e:
-        
-        if conexion and conexion.is_connected():
-            conexion.rollback()
-        return {"estatus": "error", "mensaje": str(e)}
-        
-    finally:
-        if cursor:
-            cursor.close()
-        if conexion and conexion.is_connected():
-            conexion.close()
             
-class PeticionRegistro(BaseModel):
-    username: str
+
 
 @app.post("/registro")
 def registrar_usuario(datos: PeticionRegistro):
@@ -210,6 +171,39 @@ def registrar_usuario(datos: PeticionRegistro):
             "id_usuario": nuevo_id, 
             "mensaje": "Usuario nuevo registrado correctamente"
         }
+        
+    except Exception as e:
+        if conexion and conexion.is_connected():
+            conexion.rollback()
+        return {"error": str(e)}
+        
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion and conexion.is_connected():
+            conexion.close()
+
+@app.put("/guardar_puntaje")
+def actualizar_puntaje(datos: UsuarioPuntaje):
+    conexion = None
+    cursor = None
+    
+    try:
+        conexion = mysql.connector.connect(**DB_CONFIG)
+        cursor = conexion.cursor()
+        
+        # Hacemos UPDATE para rellenar los datos de la partida en el usuario que ya creamos
+        consulta = """
+            UPDATE usuarios 
+            SET puntaje = %s, id_categoria = %s 
+            WHERE id = %s
+        """
+        valores = (datos.puntaje, datos.id_categoria, datos.id_usuario)
+        
+        cursor.execute(consulta, valores)
+        conexion.commit()
+        
+        return {"estatus": "exito", "mensaje": "Puntos actualizados correctamente"}
         
     except Exception as e:
         if conexion and conexion.is_connected():
