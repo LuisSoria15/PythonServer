@@ -20,7 +20,7 @@ print("Mis credenciales cargadas son:", DB_CONFIG)
 
 
 class UsuarioPuntaje(BaseModel):
-    nombre: int
+    id_usuario: int
     puntaje: int
     id_categoria: int
     
@@ -163,7 +163,7 @@ def registrar_usuario(datos: PeticionRegistro):
                 "mensaje": "Bienvenido de vuelta"
             }
             
-        # Si no existe lo insertamos 
+        
         cursor.execute("INSERT INTO usuarios (nombre) VALUES (%s)", (datos.username,))
         conexion.commit() 
         
