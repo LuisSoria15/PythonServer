@@ -5,6 +5,8 @@ import mysql.connector
 from dotenv import load_dotenv
 import os
 from pydantic import BaseModel
+import random
+import json
 
 load_dotenv()
 
@@ -189,9 +191,10 @@ def registrar_usuario(datos: PeticionRegistro):
             conexion.close()
 
 class GestorSalaEspera:
-    def _init_(self):
-        # Aqui guardaremos los tuneles de conexion y el nombre de cada jugador
-        self.conexiones_activas: List[Dict[str, any]] = []
+    def __init__(self):
+        self.conexiones_activas = []
+        self.votos = {} 
+        self.puntajes = {} # <--- NUEVO: Para guardar los puntos finales
 
     async def conectar(self, websocket: WebSocket, nombre: str):
         await websocket.accept()
@@ -201,54 +204,140 @@ class GestorSalaEspera:
         self.conexiones_activas = [conn for conn in self.conexiones_activas if conn["ws"] != websocket]
 
     async def enviar_a_todos(self, mensaje: dict):
-        # Esta es la funcion que les habla a los 4 usuarios
         for conexion in self.conexiones_activas:
-            await conexion["ws"].send_json(mensaje)
+            try:
+                await conexion["ws"].send_json(mensaje)
+            except Exception as e:
+                # Si una compu se desconectó, que no crashee a la otra
+                print(f"Error al enviar a {conexion['nombre']}: {e}")
             
     def obtener_nombres(self):
         # Saca solo los nombres para mostrarlos en la pantalla
         return [conn["nombre"] for conn in self.conexiones_activas]
+
+    def registrar_voto(self, ws, id_categoria):
+        self.votos[ws] = id_categoria
+
+    def todos_votaron(self):
+        # Si hay 2 jugadores y ya hay 2 votos registrados
+        return len(self.votos) == 2 and len(self.conexiones_activas) == 2
+
+    def obtener_ganador(self):
+        conteo = {}
+        # Contamos cuántos votos tiene cada categoría
+        for cat in self.votos.values():
+            conteo[cat] = conteo.get(cat, 0) + 1
+        
+        # Encontramos la cantidad máxima de votos 
+        max_votos = max(conteo.values())
+        
+        # Guardamos en una lista las categorías que tengan ese número máximo (para ver empates)
+        empatados = [cat for cat, v in conteo.items() if v == max_votos]
+        
+        # Si empatan, random.choice elige una al azar. Si solo hay una, simplemente devuelve esa.
+        return random.choice(empatados)
+    def registrar_puntaje(self, ws, nombre, puntaje):
+        self.puntajes[ws] = {"nombre": nombre, "puntaje": puntaje}
+
+    def todos_terminaron(self):
+        return len(self.puntajes) == 2 and len(self.conexiones_activas) == 2
+
+    def obtener_ganador_final(self):
+        resultados = list(self.puntajes.values())
+        # Ordenamos de mayor a menor puntaje
+        resultados.sort(key=lambda x: x["puntaje"], reverse=True)
+        return resultados
 
 # Instanciamos el manager para que este vivo todo el tiempo
 sala_manager = GestorSalaEspera()
 
 @app.websocket("/ws/sala")
 async def websocket_sala(websocket: WebSocket):
-    # El cliente se conecta y le pedimos su nombre
     await websocket.accept()
-    
     try:
-        # Esperamos a que nos mande el nombre del jugador apenas se conecta
         nombre_jugador = await websocket.receive_text()
-        
-        # Lo metemos a la memoria de la sala
         sala_manager.conexiones_activas.append({"ws": websocket, "nombre": nombre_jugador})
         
-        # Le avisamos a TODOS los conectados la lista actualizada de nombres
-        nombres_actuales = sala_manager.obtener_nombres()
-        await sala_manager.enviar_a_todos({
-            "accion": "actualizar_sala",
-            "jugadores": nombres_actuales
-        })
-        
-        # Se inicia el juego cuando ya hay 4 usuarios
-        if len(sala_manager.conexiones_activas) == 4:
-            await sala_manager.enviar_a_todos({
-                "accion": "iniciar_juego",
-                "mensaje": "¡Listos, comienza el Kahoot!"
-            })
-
-        while True:
-            data = await websocket.receive_text()
-            
-    except WebSocketDisconnect:
-        # Si a alguien se le cierra el juego o se le va el internet
-        sala_manager.desconectar(websocket)
-        # Les avisamos a los que quedaron en la sala que alguien se fue
         await sala_manager.enviar_a_todos({
             "accion": "actualizar_sala",
             "jugadores": sala_manager.obtener_nombres()
         })
+        
+        if len(sala_manager.conexiones_activas) == 2:
+            await sala_manager.enviar_a_todos({
+                "accion": "iniciar_juego",
+                "mensaje": "¡Listos, comiencen a votar por la categoría!"
+            })
+
+        while True:
+            # Ahora escuchamos los votos en formato JSON
+            data = await websocket.receive_text()
+            mensaje = json.loads(data)
+            
+            if mensaje.get("accion") == "votar":
+                id_categoria = mensaje.get("id_categoria")
+                sala_manager.registrar_voto(websocket, id_categoria)
+                
+                # Verificamos si ya tenemos los dos votos
+                if sala_manager.todos_votaron():
+                    ganador = sala_manager.obtener_ganador()
+                    
+                    # Le anunciamos el ganador a los dos jugadores a la vez
+                    await sala_manager.enviar_a_todos({
+                        "accion": "resultado_votacion",
+                        "categoria_ganadora": ganador
+                    })
+                    # Limpiamos los votos por si quieren jugar otra ronda después
+                    sala_manager.votos = {}
+                    
+            # DEJA SOLO UNA VEZ EL BLOQUE DE TERMINAR JUEGO (el que tiene los prints)
+            if mensaje.get("accion") == "terminar_juego":
+                nombre = mensaje.get("nombre")
+                puntaje = mensaje.get("puntaje")
+                sala_manager.registrar_puntaje(websocket, nombre, puntaje)
+                
+                # CHISMOSOS EN LA CONSOLA:
+                print(f"\n--- LLEGÓ EL PUNTAJE DE: {nombre} ({puntaje} pts) ---")
+                print(f"Jugadores que ya acabaron: {len(sala_manager.puntajes)}/2")
+                print(f"Conexiones vivas en la sala: {len(sala_manager.conexiones_activas)}")
+                
+                if sala_manager.todos_terminaron():
+                    print("¡LOS DOS ACABARON! Calculando ganador...")
+                    resultados = sala_manager.obtener_ganador_final()
+                    ganador = resultados[0]
+                    empate = resultados[0]["puntaje"] == resultados[1]["puntaje"]
+                    
+                    print(f"El sistema eligió: {ganador['nombre']} - ¿Empate?: {empate}")
+                    
+                    await sala_manager.enviar_a_todos({
+                        "accion": "mostrar_ganador",
+                        "ganador": ganador["nombre"],
+                        "puntaje_ganador": ganador["puntaje"],
+                        "empate": empate,
+                        "resultados": resultados
+                    })
+                    print("¡Mensaje de ganador enviado a las computadoras exitosamente!\n")
+                    sala_manager.puntajes = {}
+                    
+                    
+    except WebSocketDisconnect:
+        sala_manager.desconectar(websocket)
+        
+        # Limpiamos si dejó un voto a medias
+        if websocket in sala_manager.votos:
+            del sala_manager.votos[websocket]
+            
+        # NUEVO: Limpiamos también si dejó un puntaje fantasma
+        if websocket in sala_manager.puntajes:
+            del sala_manager.puntajes[websocket]
+            
+        # Avisamos a los que queden en la sala
+        await sala_manager.enviar_a_todos({
+            "accion": "actualizar_sala",
+            "jugadores": sala_manager.obtener_nombres()
+        })
+
+
 @app.put("/guardar_puntaje")
 def actualizar_puntaje(datos: UsuarioPuntaje):
     conexion = None
@@ -281,3 +370,5 @@ def actualizar_puntaje(datos: UsuarioPuntaje):
             cursor.close()
         if conexion and conexion.is_connected():
             conexion.close()
+            
+
