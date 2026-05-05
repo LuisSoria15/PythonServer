@@ -194,7 +194,7 @@ class GestorSalaEspera:
     def __init__(self):
         self.conexiones_activas = []
         self.votos = {} 
-        self.puntajes = {} # <--- NUEVO: Para guardar los puntos finales
+        self.puntajes = {}
 
     async def conectar(self, websocket: WebSocket, nombre: str):
         await websocket.accept()
@@ -219,8 +219,8 @@ class GestorSalaEspera:
         self.votos[ws] = id_categoria
 
     def todos_votaron(self):
-        # Si hay 2 jugadores y ya hay 2 votos registrados
-        return len(self.votos) == 2 and len(self.conexiones_activas) == 2
+        # Si hay 4 jugadores y ya hay 4 votos registrados
+        return len(self.votos) == 4 and len(self.conexiones_activas) == 4
 
     def obtener_ganador(self):
         conteo = {}
@@ -240,7 +240,7 @@ class GestorSalaEspera:
         self.puntajes[ws] = {"nombre": nombre, "puntaje": puntaje}
 
     def todos_terminaron(self):
-        return len(self.puntajes) == 2 and len(self.conexiones_activas) == 2
+        return len(self.puntajes) == 4 and len(self.conexiones_activas) == 4
 
     def obtener_ganador_final(self):
         resultados = list(self.puntajes.values())
@@ -263,7 +263,7 @@ async def websocket_sala(websocket: WebSocket):
             "jugadores": sala_manager.obtener_nombres()
         })
         
-        if len(sala_manager.conexiones_activas) == 2:
+        if len(sala_manager.conexiones_activas) == 4:
             await sala_manager.enviar_a_todos({
                 "accion": "iniciar_juego",
                 "mensaje": "¡Listos, comiencen a votar por la categoría!"
@@ -298,11 +298,11 @@ async def websocket_sala(websocket: WebSocket):
                 
                 # CHISMOSOS EN LA CONSOLA:
                 print(f"\n--- LLEGÓ EL PUNTAJE DE: {nombre} ({puntaje} pts) ---")
-                print(f"Jugadores que ya acabaron: {len(sala_manager.puntajes)}/2")
+                print(f"Jugadores que ya acabaron: {len(sala_manager.puntajes)}/4")
                 print(f"Conexiones vivas en la sala: {len(sala_manager.conexiones_activas)}")
                 
                 if sala_manager.todos_terminaron():
-                    print("¡LOS DOS ACABARON! Calculando ganador...")
+                    print("¡LOS TRES ACABARON! Calculando ganador...")
                     resultados = sala_manager.obtener_ganador_final()
                     ganador = resultados[0]
                     empate = resultados[0]["puntaje"] == resultados[1]["puntaje"]
@@ -371,4 +371,32 @@ def actualizar_puntaje(datos: UsuarioPuntaje):
         if conexion and conexion.is_connected():
             conexion.close()
             
+@app.get("/leaderboard")
+def obtener_leaderboard_global():
+    conexion = None
+    cursor = None
+    try:
+        conexion = mysql.connector.connect(**DB_CONFIG)
+        cursor = conexion.cursor(dictionary=True)
+        
+        # Traemos los mejores 10 jugadores, ordenados del mayor puntaje al menor
+        cursor.execute("""
+            SELECT nombre, puntaje 
+            FROM usuarios 
+            WHERE puntaje IS NOT NULL 
+            ORDER BY puntaje DESC 
+            LIMIT 10
+        """)
+        
+        return cursor.fetchall()
+        
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        if cursor: cursor.close()
+        if conexion and conexion.is_connected(): conexion.close()
 
+if __name__ == "__main__":
+    import uvicorn
+    # Apagamos los pings automáticos para que no los desconecte a mitad del juego
+    uvicorn.run(app, host="0.0.0.0", port=11000, ws_ping_interval=None)
